@@ -1,0 +1,8 @@
+{
+  "name": "SyncWave - Real-Time YouTube Watch Party",
+  "description": "Synchronized YouTube watch party platform with real-time video sync, live chat, WebRTC voice channels, custom rooms, customizable avatars, and shared watch history.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
