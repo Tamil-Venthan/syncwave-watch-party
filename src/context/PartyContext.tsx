@@ -74,6 +74,67 @@ const PartyContext = createContext<PartyContextType | null>(null);
 const DEFAULT_USER_KEY = 'syncwave_user_profile';
 const WATCH_HISTORY_KEY = 'syncwave_watch_history';
 
+// Standard high-reliability default video
+const INITIAL_DEFAULT_VIDEO: VideoItem = {
+  id: 'def-1',
+  youtubeId: 'jfKfPfyJRdk',
+  title: 'lofi hip hop radio 📚 - beats to relax/study to',
+  thumbnail: 'https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg',
+  duration: 0,
+  addedBy: { id: 'system', username: 'SyncWave' },
+  addedAt: Date.now()
+};
+
+function createDefaultRoom(roomId: string, user: UserProfile): RoomData {
+  return {
+    id: roomId,
+    name: roomId === 'lounge' ? 'Chill Lounge' : `Room #${roomId.slice(0, 6)}`,
+    isPrivate: false,
+    hostId: user.id,
+    hostOnlyControl: false,
+    currentVideo: { ...INITIAL_DEFAULT_VIDEO },
+    playerState: {
+      isPlaying: false,
+      currentTime: 0,
+      updatedAt: Date.now(),
+      playbackRate: 1
+    },
+    queue: [
+      {
+        id: 'q-1',
+        youtubeId: '5qap5aO4i9A',
+        title: 'lofi hip hop radio - beats to sleep/chill to',
+        thumbnail: 'https://img.youtube.com/vi/5qap5aO4i9A/hqdefault.jpg',
+        duration: 0,
+        addedBy: { id: 'system', username: 'SyncWave' },
+        addedAt: Date.now() - 30000
+      },
+      {
+        id: 'q-2',
+        youtubeId: '1nueFGvd2rE',
+        title: 'Synthwave Radio - Chill synth / retro vibes',
+        thumbnail: 'https://img.youtube.com/vi/1nueFGvd2rE/hqdefault.jpg',
+        duration: 0,
+        addedBy: { id: 'system', username: 'SyncWave' },
+        addedAt: Date.now() - 10000
+      }
+    ],
+    participants: [user],
+    messages: [
+      {
+        id: 'msg-welcome',
+        senderId: 'system',
+        senderName: 'SyncWave Bot',
+        senderAvatar: { bg: 'linear-gradient(135deg, #f43f5e, #be123c)', face: 'smile', accessory: 'headphones' },
+        text: 'Welcome to the watch party! Hit Play, paste any YouTube link, or pick from the catalog to watch in sync with friends.',
+        timestamp: Date.now(),
+        type: 'system'
+      }
+    ],
+    watchHistory: [{ ...INITIAL_DEFAULT_VIDEO }]
+  };
+}
+
 function loadInitialProfile(): UserProfile {
   if (typeof window === 'undefined') {
     return {
@@ -128,8 +189,18 @@ function loadInitialHistory(): WatchHistoryEntry[] {
 
 export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile>(loadInitialProfile);
-  const [currentRoom, setCurrentRoom] = useState<RoomData | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [currentRoom, setCurrentRoom] = useState<RoomData | null>(() => createDefaultRoom('lounge', loadInitialProfile()));
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [
+    {
+      id: 'msg-welcome',
+      senderId: 'system',
+      senderName: 'SyncWave Bot',
+      senderAvatar: { bg: 'linear-gradient(135deg, #f43f5e, #be123c)', face: 'smile', accessory: 'headphones' },
+      text: 'Welcome to the watch party! Click to start watching or pick a video from the catalog.',
+      timestamp: Date.now(),
+      type: 'system'
+    }
+  ]);
   const [reactions, setReactions] = useState<ReactionEvent[]>([]);
   const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>(loadInitialHistory);
   const [connectionStatus, setConnectionStatus] = useState({ connected: true, mode: 'connecting' });
@@ -148,7 +219,7 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isVercelModalOpen, setIsVercelModalOpen] = useState(false);
 
   // References for WebRTC and Room ID
-  const activeRoomIdRef = useRef<string>('');
+  const activeRoomIdRef = useRef<string>('lounge');
   const lastRecordedVideoId = useRef<string>('');
 
   // Save profile to localStorage
@@ -209,10 +280,18 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const joinRoom = useCallback(
     (roomId: string, password?: string) => {
       activeRoomIdRef.current = roomId;
-      // Update browser URL hash cleanly without reload
       if (typeof window !== 'undefined') {
         window.location.hash = roomId;
       }
+
+      // Optimistically ensure currentRoom is initialized immediately
+      setCurrentRoom((prev) => {
+        if (!prev || prev.id !== roomId) {
+          return createDefaultRoom(roomId, currentUser);
+        }
+        return prev;
+      });
+
       socket.connect(roomId, currentUser, password);
     },
     [currentUser]
@@ -229,7 +308,6 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const success = await webrtcVoice.startMicrophone();
       if (success) {
         setIsVoiceActive(true);
-        // Connect to existing participants in the room
         if (currentRoom) {
           currentRoom.participants.forEach((p) => {
             if (p.id !== currentUser.id) {
@@ -288,7 +366,6 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             };
           });
 
-          // If voice chat is active, connect peer
           if (isVoiceActive && user.id !== currentUser.id) {
             webrtcVoice.connectToPeer(user.id);
           }
@@ -364,7 +441,10 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         case 'chat_message': {
-          setMessages((prev) => [...prev, payload]);
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === payload.id)) return prev;
+            return [...prev, payload];
+          });
           break;
         }
 
@@ -378,7 +458,6 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             y: payload.y
           };
           setReactions((prev) => [...prev, rx]);
-          // Auto remove reaction bubble after 3.5s
           setTimeout(() => {
             setReactions((prev) => prev.filter((r) => r.id !== reactionId));
           }, 3500);
@@ -424,7 +503,6 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
 
-    // Voice speaking listener
     const unsubSpeaking = webrtcVoice.subscribeSpeaking((userId, isSpeaking) => {
       setSpeakingUsers((prev) => {
         const next = new Set(prev);
@@ -458,8 +536,21 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [joinRoom]);
 
-  // Player Sync Actions
+  // Player Sync Actions with Optimistic Local Updates
   const syncPlayerState = useCallback((isPlaying: boolean, currentTime: number, playbackRate = 1) => {
+    setCurrentRoom((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        playerState: {
+          isPlaying,
+          currentTime,
+          playbackRate,
+          updatedAt: Date.now()
+        }
+      };
+    });
+
     socket.send('player_sync', {
       isPlaying,
       currentTime,
@@ -468,8 +559,23 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const changeCurrentVideo = useCallback((video: VideoItem) => {
+    setCurrentRoom((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        currentVideo: video,
+        playerState: {
+          isPlaying: true,
+          currentTime: 0,
+          updatedAt: Date.now(),
+          playbackRate: 1
+        }
+      };
+    });
+
+    addToWatchHistory(video);
     socket.send('change_video', { video });
-  }, []);
+  }, [addToWatchHistory]);
 
   const loadVideoByUrlOrId = useCallback(
     async (urlOrId: string, customTitle?: string): Promise<boolean> => {
@@ -495,26 +601,68 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [changeCurrentVideo, currentUser]
   );
 
-  // Queue Actions
+  // Queue Actions with Optimistic Local Updates
   const addToQueue = useCallback(
     (video: VideoItem) => {
+      setCurrentRoom((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          queue: [...prev.queue, video]
+        };
+      });
       socket.send('queue_add', { video });
     },
     []
   );
 
   const removeFromQueue = useCallback((videoId: string) => {
+    setCurrentRoom((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        queue: prev.queue.filter((v) => v.id !== videoId)
+      };
+    });
     socket.send('queue_remove', { videoId });
   }, []);
 
   const playNextInQueue = useCallback(() => {
+    setCurrentRoom((prev) => {
+      if (!prev || prev.queue.length === 0) return prev;
+      const [nextVideo, ...restQueue] = prev.queue;
+      addToWatchHistory(nextVideo);
+      return {
+        ...prev,
+        currentVideo: nextVideo,
+        queue: restQueue,
+        playerState: {
+          isPlaying: true,
+          currentTime: 0,
+          updatedAt: Date.now(),
+          playbackRate: 1
+        }
+      };
+    });
     socket.send('queue_play_next', {});
-  }, []);
+  }, [addToWatchHistory]);
 
   // Chat & Reaction Actions
   const sendMessage = useCallback(
     (text: string) => {
       if (!text.trim()) return;
+      const newMsg: ChatMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        senderId: currentUser.id,
+        senderName: currentUser.username,
+        senderAvatar: currentUser.avatar,
+        text: text.trim(),
+        timestamp: Date.now(),
+        type: 'chat'
+      };
+
+      setMessages((prev) => [...prev, newMsg]);
+
       socket.send('chat_message', {
         text: text.trim(),
         senderName: currentUser.username,
@@ -526,6 +674,21 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const triggerReaction = useCallback(
     (emoji: string) => {
+      const rxId = `rx-local-${Date.now()}`;
+      setReactions((prev) => [
+        ...prev,
+        {
+          id: rxId,
+          emoji,
+          userName: currentUser.username,
+          x: Math.random() * 70 + 15,
+          y: 85
+        }
+      ]);
+      setTimeout(() => {
+        setReactions((prev) => prev.filter((r) => r.id !== rxId));
+      }, 3500);
+
       socket.send('reaction_trigger', {
         emoji,
         userName: currentUser.username,
@@ -546,6 +709,7 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       hostOnlyControl: boolean;
       initialVideoId?: string;
     }): Promise<string> => {
+      const generatedId = params.id || Math.random().toString(36).substring(2, 9);
       try {
         const res = await fetch('/api/rooms/create', {
           method: 'POST',
@@ -558,11 +722,9 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return data.roomId;
         }
       } catch (e) {
-        console.warn('API room create failed, switching locally', e);
+        // Fallback locally
       }
 
-      // Local fallback
-      const generatedId = params.id || Math.random().toString(36).substring(2, 9);
       joinRoom(generatedId, params.password);
       return generatedId;
     },
@@ -570,6 +732,14 @@ export const PartyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const updateRoomSettings = useCallback((settings: { hostOnlyControl?: boolean; transferHostId?: string }) => {
+    setCurrentRoom((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        hostId: settings.transferHostId || prev.hostId,
+        hostOnlyControl: settings.hostOnlyControl !== undefined ? settings.hostOnlyControl : prev.hostOnlyControl
+      };
+    });
     socket.send('room_settings', settings);
   }, []);
 
